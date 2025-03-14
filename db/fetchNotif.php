@@ -2,15 +2,16 @@
 session_start();
 include '../db/db_conn.php';
 
-// Check if the admin is logged in
-if (!isset($_SESSION['a_id'])) {
+// Check if either the admin or employee is logged in
+if (!isset($_SESSION['a_id']) && !isset($_SESSION['e_id'])) {
     header('Content-Type: application/json');
     echo json_encode(['error' => 'Unauthorized access. Please log in.']);
     exit();
 }
 
-// Get the logged-in admin's ID
-$adminId = $_SESSION['a_id'];
+// Determine the logged-in user's ID and role
+$userId = isset($_SESSION['a_id']) ? $_SESSION['a_id'] : $_SESSION['e_id'];
+$userRole = isset($_SESSION['a_id']) ? 'admin' : 'employee';
 
 try {
     // Handle reaction notifications if data is sent
@@ -19,18 +20,29 @@ try {
         $employeeId = $data['employee_id'];
         $reaction = $data['reaction'];
 
+        // Determine the message based on the user role
+        if ($userRole === 'admin') {
+            $message = "New reaction: $reaction from admin ID $userId for employee ID $employeeId";
+        } else {
+            $message = "New reaction: $reaction from employee ID $userId";
+        }
+
         // Insert the reaction notification into the database
-        $message = "New reaction: $reaction from employee ID $employeeId";
         $insertQuery = "
-            INSERT INTO notifications (admin_id, message, status) 
-            VALUES (?, ?, 'unread')";
+            INSERT INTO notifications (admin_id, employee_id, message, status)
+            VALUES (?, ?, ?, 'unread')";
         $insertStmt = $conn->prepare($insertQuery);
 
         if (!$insertStmt) {
             throw new Exception("Failed to prepare the SQL statement: " . $conn->error);
         }
 
-        $insertStmt->bind_param("is", $adminId, $message);
+        // Bind parameters based on the user role
+        if ($userRole === 'admin') {
+            $insertStmt->bind_param("iis", $userId, $employeeId, $message);
+        } else {
+            $insertStmt->bind_param("iis", null, $userId, $message);
+        }
 
         if (!$insertStmt->execute()) {
             throw new Exception("Failed to execute the SQL statement: " . $insertStmt->error);
@@ -41,9 +53,9 @@ try {
 
     // Fetch all notifications (both read and unread)
     $notificationQuery = "
-        SELECT notification_id, message, created_at, status 
-        FROM notifications 
-        WHERE admin_id = ?
+        SELECT notification_id, message, created_at, status
+        FROM notifications
+        WHERE admin_id = ? OR employee_id = ?
         ORDER BY created_at DESC";
     $notificationStmt = $conn->prepare($notificationQuery);
 
@@ -51,7 +63,12 @@ try {
         throw new Exception("Failed to prepare the SQL statement: " . $conn->error);
     }
 
-    $notificationStmt->bind_param("i", $adminId);
+    // Bind the user ID to fetch relevant notifications
+    if ($userRole === 'admin') {
+        $notificationStmt->bind_param("ii", $userId, $userId);
+    } else {
+        $notificationStmt->bind_param("ii", $userId, $userId);
+    }
 
     if (!$notificationStmt->execute()) {
         throw new Exception("Failed to execute the SQL statement: " . $notificationStmt->error);
